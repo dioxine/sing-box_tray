@@ -1,0 +1,24 @@
+[package]
+name = "sing-box_tray"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tray-icon = "0.19"
+muda = "0.15"       # Используется вместе с tray-icon для меню
+sysinfo = "0.33"    # Для мониторинга процесса sing-box
+winit = "0.30"      # Для поддержания работы цикла событий без открытия окна
+image = "0.25"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+
+[package.metadata.bundle]
+name = "SingBoxTray"
+identifier = "com.user.singboxtray"
+icon = ["assets/MyIcon.icns"] # можно оставить пустым или указать .icns для приложения
+version = "0.1.0"
+resources = []
+
+[package.metadata.bundle.settings.macos]
+LSUIElement = true
+
