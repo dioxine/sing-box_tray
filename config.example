@@ -1,0 +1,129 @@
+// rename it to config.jon, put into ~/.config/sing-box and edit with your servers, keys and clashAPI secret
+{
+  "log": {
+    "level": "warn",
+    "disabled": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "dns-remote",
+        "type": "tls",
+        "server": "one.one.one.one",
+        "domain_resolver": "dns-local"
+      },
+      {
+        "tag": "dns-local",
+        "type": "local"
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": [".ru", ".su"],
+        "server": "dns-local"
+      }
+    ],
+    "final": "dns-remote",
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "tag": "all-in",
+      "type": "tun",
+      "address": ["172.16.0.1/30"],
+      "mtu": 1400,
+      "stack": "system",
+      "auto_route": true,
+      "strict_route": false
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "hysteria2-out",
+      "password": "------------------------",
+      "server": "-----------------------",
+      "server_port": 443,
+      "tls": {
+        "enabled": true
+      },
+      "domain_resolver": {
+        "server": "dns-remote",
+        "strategy": "prefer_ipv4"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "vless-out",
+      "server": "----------------------------",
+      "server_port": 443,
+      "uuid": "-----------------------------",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "------------------------",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "-------------------------",
+          "short_id": "--------------------------"
+        }
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct-out"
+    },
+    {
+      "type": "selector",
+      "tag": "select-out",
+      "outbounds": [
+        "hysteria2-out",
+        "vless-out"
+      ],
+      "default": "hysteria2-out",
+      "interrupt_exist_connections": false
+    }
+  ],
+  "route": {
+    "default_domain_resolver": {
+      "server": "dns-local"
+    },
+    "auto_detect_interface": true,
+    "final": "select-out",
+    "rules": [
+      {
+        "inbound": "all-in",
+        "action": "sniff",
+        "timeout": "1s"
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "ip_cidr": ["1.1.1.1/32", "1.0.0.1/32"],
+        "outbound": "direct-out"
+      },
+      {
+        "protocol": "bittorrent",
+        "outbound": "direct-out"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct-out"
+      }
+    ]
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "external_ui": "",
+      "secret": "YOUR_SECRET_TOKEN",
+      "default_mode": "rule"
+    }
+  }
+}
