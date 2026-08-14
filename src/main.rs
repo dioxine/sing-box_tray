@@ -15,7 +15,7 @@ const PROCESS_NAME: &str = "sing-box";
 const CLASH_SOCKET_ADDR: &str = "127.0.0.1:9090";
 const CLASH_SECRET: &str = "YOUR_SECRET_TOKEN";
 
-// Оставляем только ОДИН файл иконки, как вы просили
+// Оставляем только ОДИН файл иконки
 const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
 
 // Базовый цвет для выключенного состояния (серый)
@@ -23,7 +23,7 @@ const COLOR_OFF: [u8; 4] = [128, 128, 128, 255];
 
 const COLOR_GREEN: [u8; 4] = [50, 255, 130, 255]; 
 const COLOR_BLUE: [u8; 4] = [60, 190, 255, 255];
-const COLOR_RED: [u8; 4] = [255, 80, 80, 255]; //
+const COLOR_RED: [u8; 4] = [255, 80, 80, 255];
 const COLOR_ORANGE: [u8; 4] = [255, 150, 50, 255]; 
 const COLOR_YELLOW: [u8; 4] = [255, 230, 50, 255]; 
 const COLOR_INDIGO: [u8; 4] = [130, 100, 255, 255]; 
