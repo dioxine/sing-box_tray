@@ -1,5 +1,7 @@
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem}; // Добавили CheckMenuItem
 use serde::Deserialize;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::time::Duration;
 use sysinfo::{ProcessesToUpdate, System};
 use tray_icon::{Icon, TrayIconBuilder};
@@ -9,7 +11,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
 const PROCESS_NAME: &str = "sing-box";
-const CLASH_API_URL: &str = "http://127.0.0.1:9090";
+// const CLASH_API_URL: &str = "http://127.0.0.1:9090";
+const CLASH_SOCKET_ADDR: &str = "127.0.0.1:9090";
 const CLASH_SECRET: &str = "YOUR_SECRET_TOKEN";
 
 const ICON_ACTIVE_BYTES: &[u8] = include_bytes!("../assets/icon_green.png");
@@ -242,35 +245,80 @@ impl TrayApp {
     }
 }
 
+/// Делает ручной GET запрос через TCP-сокет и извлекает JSON
 fn fetch_clash_proxies() -> Result<ClashSelector, Box<dyn std::error::Error>> {
-    let config = ureq::config::Config::builder()
-        .timeout_global(Some(Duration::from_millis(500)))
-        .build();
+    // 1. Открываем TCP соединение с таймаутом
+    let mut stream = TcpStream::connect_timeout(
+        &CLASH_SOCKET_ADDR.parse()?, 
+        Duration::from_millis(500)
+    )?;
+    stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+
+    // 2. Формируем сырой HTTP/1.1 GET запрос вручную. Важно соблюдать перенос строк \r\n!
+    let request = format!(
+        "GET /proxies/select-out HTTP/1.1\r\n\
+         Host: {}\r\n\
+         Authorization: Bearer {}\r\n\
+         Connection: close\r\n\r\n",
+        CLASH_SOCKET_ADDR, CLASH_SECRET
+    );
+
+    // 3. Отправляем байты запроса в сокет
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+
+    // 4. Читаем весь ответ из сокета в буфер
+    let mut response_bytes = Vec::new();
+    stream.read_to_end(&mut response_bytes)?;
     
-    let agent = config.new_agent();
+    // Преобразуем байты в строку для обработки заголовков
+    let response_str = String::from_utf8_lossy(&response_bytes);
 
-    let response = agent.get(format!("{}/proxies/select-out", CLASH_API_URL))
-        .header("Authorization", format!("Bearer {}", CLASH_SECRET))
-        .call()?;
-
-    // ИСПРАВЛЕНО: В ureq v3 JSON извлекается через .into_body().read_json()
-    let selector: ClashSelector = response.into_body().read_json()?;
-    Ok(selector)
+    // 5. Парсим HTTP-ответ. Нам нужно отделить заголовки от тела JSON.
+    // По спецификации HTTP, тело ответа всегда отделяется от заголовков двойным переносом строки \r\n\r\n
+    if let Some(body_index) = response_str.find("\r\n\r\n") {
+        let body = &response_str[body_index + 4..]; // +4 символа, чтобы пропустить \r\n\r\n
+        
+        // Парсим чистый JSON строку в нашу структуру
+        let selector: ClashSelector = serde_json::from_str(body)?;
+        Ok(selector)
+    } else {
+        Err("Неверный формат HTTP-ответа от sing-box".into())
+    }
 }
 
-/// Переключает sing-box на выбранный аутбаунд
+/// Делает ручной PUT запрос с JSON-нагрузкой через TCP-сокет
 fn switch_clash_proxy(target_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let config = ureq::config::Config::builder()
-        .timeout_global(Some(Duration::from_millis(500)))
-        .build();
-    
-    let agent = config.new_agent();
-    let payload = ChangeProxyPayload { name: target_name.to_string() };
+    let mut stream = TcpStream::connect_timeout(
+        &CLASH_SOCKET_ADDR.parse()?, 
+        Duration::from_millis(500)
+    )?;
+    stream.set_read_timeout(Some(Duration::from_millis(500)))?;
 
-    // Метод PUT отправляет JSON-объект и возвращает результат
-    let _response = agent.put(format!("{}/proxies/select-out", CLASH_API_URL))
-        .header("Authorization", format!("Bearer {}", CLASH_SECRET))
-        .send_json(serde_json::to_value(payload)?)?;
+    // Сериализуем структуру payload в JSON строку
+    let payload = ChangeProxyPayload { name: target_name.to_string() };
+    let json_body = serde_json::to_string(&payload)?;
+
+    // Формируем сырой HTTP/1.1 PUT запрос. 
+    // Для POST/PUT запросов обязательно передавать заголовки Content-Type и Content-Length!
+    let request = format!(
+        "PUT /proxies/select-out HTTP/1.1\r\n\
+         Host: {}\r\n\
+         Authorization: Bearer {}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n\
+         {}",
+        CLASH_SOCKET_ADDR, CLASH_SECRET, json_body.len(), json_body
+    );
+
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+
+    // Для PUT-запроса sing-box возвращает статус 204 No Content и закрывает сокет.
+    // Читаем ответ, чтобы гарантировать завершение операции на стороне ОС
+    let mut buffer = [0; 128];
+    let _ = stream.read(&mut buffer)?;
 
     Ok(())
 }
