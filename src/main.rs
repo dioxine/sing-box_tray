@@ -112,7 +112,7 @@ impl ApplicationHandler for TrayApp {
 
                         // ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ПРИ СТАРТЕ:
                         // Даем ОС 600мс, чтобы sing-box точно запустил свой Clash HTTP-сервер
-                        std::thread::sleep(Duration::from_millis(600));
+                        std::thread::sleep(Duration::from_millis(1000));
 
                         // Синхронизируем статус, чтобы фоновый поток не запутался
                         self.last_status = true;
@@ -242,28 +242,36 @@ impl TrayApp {
     }
 }
 
-fn fetch_clash_proxies() -> Result<ClashSelector, reqwest::Error> {
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .get(format!("{}/proxies/select-out", CLASH_API_URL))
-        .header("Authorization", format!("Bearer {}", CLASH_SECRET)) // Добавили авторизацию
-        .timeout(Duration::from_millis(500))
-        .send()?;
-    let selector: ClashSelector = response.json()?;
+fn fetch_clash_proxies() -> Result<ClashSelector, Box<dyn std::error::Error>> {
+    let config = ureq::config::Config::builder()
+        .timeout_global(Some(Duration::from_millis(500)))
+        .build();
+    
+    let agent = config.new_agent();
+
+    let response = agent.get(format!("{}/proxies/select-out", CLASH_API_URL))
+        .header("Authorization", format!("Bearer {}", CLASH_SECRET))
+        .call()?;
+
+    // ИСПРАВЛЕНО: В ureq v3 JSON извлекается через .into_body().read_json()
+    let selector: ClashSelector = response.into_body().read_json()?;
     Ok(selector)
 }
 
-fn switch_clash_proxy(target_name: &str) -> Result<(), reqwest::Error> {
-    let client = reqwest::blocking::Client::new();
-    let payload = ChangeProxyPayload {
-        name: target_name.to_string(),
-    };
-    let _response = client
-        .put(format!("{}/proxies/select-out", CLASH_API_URL))
-        .header("Authorization", format!("Bearer {}", CLASH_SECRET)) // Добавили авторизацию
-        .json(&payload)
-        .timeout(Duration::from_millis(500))
-        .send()?;
+/// Переключает sing-box на выбранный аутбаунд
+fn switch_clash_proxy(target_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let config = ureq::config::Config::builder()
+        .timeout_global(Some(Duration::from_millis(500)))
+        .build();
+    
+    let agent = config.new_agent();
+    let payload = ChangeProxyPayload { name: target_name.to_string() };
+
+    // Метод PUT отправляет JSON-объект и возвращает результат
+    let _response = agent.put(format!("{}/proxies/select-out", CLASH_API_URL))
+        .header("Authorization", format!("Bearer {}", CLASH_SECRET))
+        .send_json(serde_json::to_value(payload)?)?;
+
     Ok(())
 }
 
