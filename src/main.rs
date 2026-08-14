@@ -1,4 +1,5 @@
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, CheckMenuItem}; // Добавили CheckMenuItem
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem}; // Добавили CheckMenuItem
+use serde::Deserialize;
 use std::time::Duration;
 use sysinfo::{ProcessesToUpdate, System};
 use tray_icon::{Icon, TrayIconBuilder};
@@ -6,11 +7,10 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
-use serde::Deserialize;
 
 const PROCESS_NAME: &str = "sing-box";
 const CLASH_API_URL: &str = "http://127.0.0.1:9090";
-const CLASH_SECRET: &str = "YOUR_SECRET_TOKEN"; 
+const CLASH_SECRET: &str = "YOUR_SECRET_TOKEN";
 
 const ICON_ACTIVE_BYTES: &[u8] = include_bytes!("../assets/icon_green.png");
 const ICON_INACTIVE_BYTES: &[u8] = include_bytes!("../assets/icon_gray.png");
@@ -33,7 +33,7 @@ struct ProxyMenuItem {
 
 struct TrayApp {
     tray_icon: Option<tray_icon::TrayIcon>,
-    tray_menu: Menu,           
+    tray_menu: Menu,
     start_item: MenuItem,
     stop_item: MenuItem,
     quit_item: MenuItem,
@@ -41,13 +41,19 @@ struct TrayApp {
     icon_off: Icon,
     sys: System,
     last_status: bool,
-    proxy_items: Vec<ProxyMenuItem>, 
+    proxy_items: Vec<ProxyMenuItem>,
 }
 
 impl ApplicationHandler for TrayApp {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
 
-    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _window_id: WindowId, _event: WindowEvent) {}
+    fn window_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        _event: WindowEvent,
+    ) {
+    }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let current_status = is_process_running(&mut self.sys);
@@ -70,7 +76,12 @@ impl ApplicationHandler for TrayApp {
         if current_status && !self.proxy_items.is_empty() {
             if let Ok(selector) = fetch_clash_proxies() {
                 for item in &self.proxy_items {
-                    if let Some(menu_item) = self.tray_menu.items().into_iter().find(|i| item.id == i.id()) {
+                    if let Some(menu_item) = self
+                        .tray_menu
+                        .items()
+                        .into_iter()
+                        .find(|i| item.id == i.id())
+                    {
                         if let muda::MenuItemKind::Check(m_item) = menu_item {
                             let _ = m_item.set_checked(item.name == selector.now);
                         }
@@ -82,10 +93,11 @@ impl ApplicationHandler for TrayApp {
         if let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.start_item.id() {
                 println!("Нажата кнопка Start. Запуск sing-box...");
-                let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/Users/shared".to_string());
+                let home_dir =
+                    std::env::var("HOME").unwrap_or_else(|_| "/Users/shared".to_string());
                 let config_path = format!("{}/.config/sing-box/config.json", home_dir);
 
-                let _ = std::process::Command::new("sudo")
+                let run_result = std::process::Command::new("sudo")
                     .arg("/usr/local/bin/sing-box")
                     .arg("-c")
                     .arg(&config_path)
@@ -94,17 +106,45 @@ impl ApplicationHandler for TrayApp {
                     .stderr(std::process::Stdio::null())
                     .spawn();
 
+                match run_result {
+                    Ok(_) => {
+                        println!("sing-box запущен в фоне! Ожидаем старта API...");
+
+                        // ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ ПРИ СТАРТЕ:
+                        // Даем ОС 600мс, чтобы sing-box точно запустил свой Clash HTTP-сервер
+                        std::thread::sleep(Duration::from_millis(600));
+
+                        // Синхронизируем статус, чтобы фоновый поток не запутался
+                        self.last_status = true;
+                        if let Some(ref mut tray) = self.tray_icon {
+                            tray.set_icon(Some(self.icon_on.clone())).unwrap();
+                        }
+
+                        // Сразу строим меню селекторов!
+                        self.rebuild_proxy_menu();
+                    }
+                    Err(e) => {
+                        eprintln!("Ошибка запуска: {}", e);
+                    }
+                }
             } else if event.id == self.stop_item.id() {
                 println!("Нажата кнопка Stop...");
-                let _ = std::process::Command::new("sudo").arg("killall").arg(PROCESS_NAME).output();
-                
+                let _ = std::process::Command::new("sudo")
+                    .arg("killall")
+                    .arg(PROCESS_NAME)
+                    .output();
             } else if event.id == self.quit_item.id() {
                 println!("Выход...");
-                let _ = std::process::Command::new("sudo").arg("killall").arg(PROCESS_NAME).output();
+                let _ = std::process::Command::new("sudo")
+                    .arg("killall")
+                    .arg(PROCESS_NAME)
+                    .output();
                 self.tray_icon.take();
                 event_loop.exit();
             } else {
-                if let Some(clicked_proxy) = self.proxy_items.iter().find(|item| item.id == event.id) {
+                if let Some(clicked_proxy) =
+                    self.proxy_items.iter().find(|item| item.id == event.id)
+                {
                     println!("Переключаем на: {}", clicked_proxy.name);
                     if let Err(e) = switch_clash_proxy(&clicked_proxy.name) {
                         eprintln!("Ошибка Clash API: {}", e);
@@ -112,7 +152,12 @@ impl ApplicationHandler for TrayApp {
                         // Исправлено: Смена порядка сравнения ID для ручного обновления галочек
                         if let Ok(selector) = fetch_clash_proxies() {
                             for item in &self.proxy_items {
-                                if let Some(menu_item) = self.tray_menu.items().into_iter().find(|i| item.id == i.id()) {
+                                if let Some(menu_item) = self
+                                    .tray_menu
+                                    .items()
+                                    .into_iter()
+                                    .find(|i| item.id == i.id())
+                                {
                                     if let muda::MenuItemKind::Check(m_item) = menu_item {
                                         let _ = m_item.set_checked(item.name == selector.now);
                                     }
@@ -134,14 +179,29 @@ impl TrayApp {
     // Исправлено: Удаление элементов по ссылке на сам элемент внутри MenuItemKind
     fn clear_proxy_menu(&mut self) {
         for item in &self.proxy_items {
-            if let Some(menu_item) = self.tray_menu.items().into_iter().find(|i| item.id == i.id()) {
+            if let Some(menu_item) = self
+                .tray_menu
+                .items()
+                .into_iter()
+                .find(|i| item.id == i.id())
+            {
                 // Извлекаем конкретный тип из MenuItemKind перед удалением
                 match menu_item {
-                    muda::MenuItemKind::MenuItem(i) => { let _ = self.tray_menu.remove(&i); }
-                    muda::MenuItemKind::Check(i) => { let _ = self.tray_menu.remove(&i); }
-                    muda::MenuItemKind::Icon(i) => { let _ = self.tray_menu.remove(&i); }
-                    muda::MenuItemKind::Predefined(i) => { let _ = self.tray_menu.remove(&i); }
-                    muda::MenuItemKind::Submenu(i) => { let _ = self.tray_menu.remove(&i); }
+                    muda::MenuItemKind::MenuItem(i) => {
+                        let _ = self.tray_menu.remove(&i);
+                    }
+                    muda::MenuItemKind::Check(i) => {
+                        let _ = self.tray_menu.remove(&i);
+                    }
+                    muda::MenuItemKind::Icon(i) => {
+                        let _ = self.tray_menu.remove(&i);
+                    }
+                    muda::MenuItemKind::Predefined(i) => {
+                        let _ = self.tray_menu.remove(&i);
+                    }
+                    muda::MenuItemKind::Submenu(i) => {
+                        let _ = self.tray_menu.remove(&i);
+                    }
                 }
             }
         }
@@ -154,13 +214,13 @@ impl TrayApp {
 
         if let Ok(selector) = fetch_clash_proxies() {
             let mut new_items = Vec::new();
-            
+
             let separator = PredefinedMenuItem::separator();
-            let _ = self.tray_menu.insert(&separator, 2); 
+            let _ = self.tray_menu.insert(&separator, 2);
 
             for (index, proxy_name) in selector.all.iter().enumerate() {
                 let is_current = proxy_name == &selector.now;
-                
+
                 // Создаем чекбокс-пункт
                 let item = CheckMenuItem::with_id(
                     muda::MenuId::new(format!("proxy_{}", proxy_name)),
@@ -171,7 +231,7 @@ impl TrayApp {
                 );
 
                 let _ = self.tray_menu.insert(&item, 3 + index);
-                
+
                 new_items.push(ProxyMenuItem {
                     id: item.id().clone(),
                     name: proxy_name.clone(),
@@ -195,7 +255,9 @@ fn fetch_clash_proxies() -> Result<ClashSelector, reqwest::Error> {
 
 fn switch_clash_proxy(target_name: &str) -> Result<(), reqwest::Error> {
     let client = reqwest::blocking::Client::new();
-    let payload = ChangeProxyPayload { name: target_name.to_string() };
+    let payload = ChangeProxyPayload {
+        name: target_name.to_string(),
+    };
     let _response = client
         .put(format!("{}/proxies/select-out", CLASH_API_URL))
         .header("Authorization", format!("Bearer {}", CLASH_SECRET)) // Добавили авторизацию
@@ -205,9 +267,10 @@ fn switch_clash_proxy(target_name: &str) -> Result<(), reqwest::Error> {
     Ok(())
 }
 
-
 fn load_icon_from_memory(bytes: &[u8]) -> Icon {
-    let image = image::load_from_memory(bytes).expect("Не удалось декодировать иконку").into_rgba8();
+    let image = image::load_from_memory(bytes)
+        .expect("Не удалось декодировать иконку")
+        .into_rgba8();
     let (width, height) = image.dimensions();
     Icon::from_rgba(image.into_raw(), width, height).unwrap()
 }
@@ -219,16 +282,16 @@ fn is_process_running(sys: &mut System) -> bool {
         #[cfg(not(target_os = "windows"))]
         {
             use sysinfo::ProcessStatus;
-            name_matches && val.status() != ProcessStatus::Dead && val.status() != ProcessStatus::Zombie
+            name_matches
+                && val.status() != ProcessStatus::Dead
+                && val.status() != ProcessStatus::Zombie
         }
         #[cfg(target_os = "windows")]
         name_matches
     })
 }
 
-
 fn main() {
-
     #[cfg(target_os = "macos")]
     {
         // Импортируем MainThreadMarker напрямую из корня objc2
@@ -239,7 +302,7 @@ fn main() {
         if let Some(mtm) = MainThreadMarker::new() {
             // 2. Запрашиваем экземпляр приложения, передавая маркер
             let app = NSApplication::sharedApplication(mtm);
-            
+
             // 3. Устанавливаем политику Accessory
             let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         }
@@ -268,30 +331,29 @@ fn main() {
 
     // Создаем иконку в системном менюбаре
     let tray_icon = TrayIconBuilder::new()
-        .with_menu(Box::new(tray_menu.clone())) 
+        .with_menu(Box::new(tray_menu.clone()))
         .with_tooltip("Sing-box Monitor")
         .with_icon(icon_off.clone())
         .build()
         .unwrap();
-    
-        let mut app = TrayApp {
-            tray_icon: Some(tray_icon),
-            tray_menu, // Теперь владение передается успешно!
-            start_item,
-            stop_item,
-            quit_item,
-            icon_on,
-            icon_off,
-            sys: System::new(),
-            last_status: false,
-            proxy_items: Vec::new(),
-        };
+
+    let mut app = TrayApp {
+        tray_icon: Some(tray_icon),
+        tray_menu, // Теперь владение передается успешно!
+        start_item,
+        stop_item,
+        quit_item,
+        icon_on,
+        icon_off,
+        sys: System::new(),
+        last_status: false,
+        proxy_items: Vec::new(),
+    };
 
     // Настраиваем начальный таймер и запускаем приложение через run_app
     event_loop.set_control_flow(ControlFlow::WaitUntil(
         std::time::Instant::now() + Duration::from_secs(2),
     ));
-    
+
     event_loop.run_app(&mut app).unwrap();
 }
-
